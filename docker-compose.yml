@@ -1,0 +1,79 @@
+# Local dev stack. Phase 2 adds TEI embed/rerank and the mock LLM under the `models` profile.
+name: jobapplier
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: jobapplier
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jobapplier}
+      POSTGRES_DB: jobapplier
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobapplier -d jobapplier"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  elasticmq:  # SQS
+    image: softwaremill/elasticmq-native:1.6.9
+    ports: ["9324:9324", "9325:9325"]
+    volumes:
+      - ./docker/elasticmq/elasticmq.conf:/opt/elasticmq.conf:ro
+
+  seaweedfs:  # S3-compatible object store (MinIO images are no longer publicly pullable)
+    image: chrislusf/seaweedfs:3.80
+    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=8333
+    ports: ["8333:8333"]
+    volumes: [s3data:/data]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8333/"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  s3-init:  # creates the local buckets named in config/local.yaml
+    image: chrislusf/seaweedfs:3.80
+    depends_on:
+      seaweedfs: { condition: service_healthy }
+    entrypoint: >
+      /bin/sh -c "
+      for b in jobapplier-prompts-local jobapplier-config-local; do
+        echo \"s3.bucket.create -name $$b\" | weed shell -master=seaweedfs:9333;
+      done
+      "
+
+  jaeger:  # traces (OTLP in, UI on 16686)
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["16686:16686", "4317:4317", "4318:4318"]
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      SERVICE_VERSION: ${SERVICE_VERSION:-dev}
+      CONFIG_SOURCE: file
+      CONFIG_PATH: /app/config/local.yaml
+      SECRETS_BACKEND: env
+      DATABASE_URL: postgresql://jobapplier:${POSTGRES_PASSWORD:-jobapplier}@postgres:5432/jobapplier
+    ports: ["8000:8000"]
+    volumes:
+      - ./config:/app/config:ro   # edit config/local.yaml and it hot-reloads
+    depends_on:
+      postgres: { condition: service_healthy }
+      jaeger: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  s3data:

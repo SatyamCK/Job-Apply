@@ -1,0 +1,1 @@
+"""Job Applier shared package."""

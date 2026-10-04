@@ -1,0 +1,42 @@
+# Tool configuration only. Installable packages live in packages/* and services/*.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["S101"]  # asserts are fine in tests
+
+[tool.ruff.lint.per-file-ignores]
+"migrations/versions/*" = ["E501"]
+"**/tests/**" = ["S105", "S106"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["common", "api"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+mypy_path = ["packages/common/src", "services/api/src"]
+explicit_package_bases = true
+exclude = ["^migrations/"]
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*", "jsonschema.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*", "conftest"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["packages/common/tests", "services/api/tests"]
+addopts = "-ra --import-mode=importlib"
+pythonpath = ["."]
+markers = [
+  "db: needs a reachable Postgres (TEST_DATABASE_URL); fails instead of skipping when REQUIRE_DB=1",
+]

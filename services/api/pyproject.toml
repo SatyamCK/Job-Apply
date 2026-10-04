@@ -1,0 +1,18 @@
+[project]
+name = "jobapplier-api"
+version = "0.1.0"
+description = "Job Applier REST API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "jobapplier-common",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "opentelemetry-instrumentation-fastapi>=0.48b0",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

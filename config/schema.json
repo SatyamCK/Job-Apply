@@ -1,0 +1,439 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jobapplier.internal/config/schema.json",
+  "title": "Job Applier runtime configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "environment", "version", "runtime", "database", "queues", "llm", "pricing", "embeddings",
+    "reranker", "prompts", "matching", "job_sources", "contact_finder", "email",
+    "notifications", "observability", "admin", "features"
+  ],
+  "$defs": {
+    "secretRef": { "type": "string", "pattern": "^secret:[a-z0-9_]+$" },
+    "httpUrl": { "type": "string", "pattern": "^https?://\\S+$" },
+    "s3Uri": { "type": "string", "pattern": "^s3://[a-z0-9.-]+(/\\S*)?$" },
+    "nonNegNumber": { "type": "number", "minimum": 0 },
+    "posInt": { "type": "integer", "minimum": 1 },
+    "pct": { "type": "number", "minimum": 0, "maximum": 100 },
+    "llmProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "base_url", "model", "auth", "timeout_seconds", "max_concurrency"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "base_url": { "$ref": "#/$defs/httpUrl" },
+        "model": { "type": "string", "minLength": 1 },
+        "auth": {
+          "oneOf": [
+            { "enum": ["bedrock_short_term_key", "none"] },
+            { "$ref": "#/$defs/secretRef" }
+          ]
+        },
+        "timeout_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "max_concurrency": { "$ref": "#/$defs/posInt" }
+      }
+    },
+    "llmTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "reasoning_effort", "temperature", "max_tokens", "prompt"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "reasoning_effort": { "enum": ["low", "medium", "high"] },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+        "max_tokens": { "$ref": "#/$defs/posInt" },
+        "prompt": { "type": "string", "pattern": "^[a-z_]+/v[0-9]+\\.md$" }
+      }
+    },
+    "price": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": { "$ref": "#/$defs/nonNegNumber" },
+        "output": { "$ref": "#/$defs/nonNegNumber" }
+      }
+    },
+    "toggle": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": { "enabled": { "type": "boolean" } }
+    }
+  },
+  "properties": {
+    "environment": { "enum": ["local", "dev", "staging", "prod"] },
+    "version": { "$ref": "#/$defs/posInt" },
+
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config_poll_seconds"],
+      "properties": {
+        "config_poll_seconds": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "pool_size"],
+      "properties": {
+        "url": { "$ref": "#/$defs/secretRef" },
+        "pool_size": { "$ref": "#/$defs/posInt" }
+      }
+    },
+
+    "queues": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint_url", "region", "max_receive_count", "dlq_suffix", "names"],
+      "properties": {
+        "endpoint_url": { "oneOf": [{ "$ref": "#/$defs/httpUrl" }, { "type": "null" }] },
+        "region": { "type": "string", "minLength": 1 },
+        "max_receive_count": { "$ref": "#/$defs/posInt" },
+        "dlq_suffix": { "type": "string", "minLength": 1 },
+        "names": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fetch", "normalize", "match", "contact", "draft", "send"],
+          "properties": {
+            "fetch": { "type": "string", "minLength": 1 },
+            "normalize": { "type": "string", "minLength": 1 },
+            "match": { "type": "string", "minLength": 1 },
+            "contact": { "type": "string", "minLength": 1 },
+            "draft": { "type": "string", "minLength": 1 },
+            "send": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+
+    "llm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providers", "default_provider", "fallback_provider", "retries", "tasks"],
+      "properties": {
+        "providers": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/llmProvider" }
+        },
+        "default_provider": { "type": "string", "minLength": 1 },
+        "fallback_provider": { "type": ["string", "null"] },
+        "retries": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_attempts", "base_delay_ms"],
+          "properties": {
+            "max_attempts": { "$ref": "#/$defs/posInt" },
+            "base_delay_ms": { "$ref": "#/$defs/nonNegNumber" }
+          }
+        },
+        "tasks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["parse_resume", "parse_job", "score_fit", "draft_email", "check_claims"],
+          "properties": {
+            "parse_resume": { "$ref": "#/$defs/llmTask" },
+            "parse_job": { "$ref": "#/$defs/llmTask" },
+            "score_fit": { "$ref": "#/$defs/llmTask" },
+            "draft_email": { "$ref": "#/$defs/llmTask" },
+            "check_claims": { "$ref": "#/$defs/llmTask" }
+          }
+        }
+      }
+    },
+
+    "pricing": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/price" }
+    },
+
+    "embeddings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "model", "dimensions", "batch_size"],
+      "properties": {
+        "base_url": { "$ref": "#/$defs/httpUrl" },
+        "model": { "type": "string", "minLength": 1 },
+        "dimensions": { "$ref": "#/$defs/posInt" },
+        "batch_size": { "$ref": "#/$defs/posInt" }
+      }
+    },
+
+    "reranker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "model"],
+      "properties": {
+        "base_url": { "$ref": "#/$defs/httpUrl" },
+        "model": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "prompts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket"],
+      "properties": { "bucket": { "$ref": "#/$defs/s3Uri" } }
+    },
+
+    "matching": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vector_top_k", "rerank_top_k", "min_fit_score", "max_job_age_days", "llm_parse_only_shortlisted"],
+      "properties": {
+        "vector_top_k": { "$ref": "#/$defs/posInt" },
+        "rerank_top_k": { "$ref": "#/$defs/posInt" },
+        "min_fit_score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "max_job_age_days": { "$ref": "#/$defs/posInt" },
+        "llm_parse_only_shortlisted": { "type": "boolean" }
+      }
+    },
+
+    "job_sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schedule", "dedupe_on", "registry_file", "sources"],
+      "properties": {
+        "schedule": { "type": "string", "pattern": "^(rate|cron)\\(.+\\)$" },
+        "dedupe_on": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["company", "title", "location"] }
+        },
+        "registry_file": { "$ref": "#/$defs/s3Uri" },
+        "sources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["greenhouse", "lever", "ashby", "arbeitnow", "hn_whos_hiring", "adzuna", "jooble", "jsearch"],
+          "properties": {
+            "greenhouse": { "$ref": "#/$defs/toggle" },
+            "lever": { "$ref": "#/$defs/toggle" },
+            "ashby": { "$ref": "#/$defs/toggle" },
+            "arbeitnow": { "$ref": "#/$defs/toggle" },
+            "hn_whos_hiring": { "$ref": "#/$defs/toggle" },
+            "adzuna": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "countries", "app_id", "app_key"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "countries": { "type": "array", "items": { "type": "string", "pattern": "^[a-z]{2}$" } },
+                "app_id": { "$ref": "#/$defs/secretRef" },
+                "app_key": { "$ref": "#/$defs/secretRef" }
+              }
+            },
+            "jooble": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "api_key"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "api_key": { "$ref": "#/$defs/secretRef" }
+              }
+            },
+            "jsearch": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "api_key"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "api_key": { "$ref": "#/$defs/secretRef" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "contact_finder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["order", "providers", "verifier", "min_confidence", "skip_catch_all", "allow_generic_inbox", "cache_days", "respect_robots_txt"],
+      "properties": {
+        "order": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["job_post", "careers_page", "hunter", "apollo", "name_pattern", "generic_inbox"] }
+        },
+        "providers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hunter", "apollo"],
+          "properties": {
+            "hunter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "api_key", "department"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "api_key": { "$ref": "#/$defs/secretRef" },
+                "department": { "type": "string" }
+              }
+            },
+            "apollo": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["enabled", "api_key", "titles"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "api_key": { "$ref": "#/$defs/secretRef" },
+                "titles": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "verifier": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "api_key"],
+          "properties": {
+            "provider": { "enum": ["zerobounce", "neverbounce", "hunter"] },
+            "api_key": { "$ref": "#/$defs/secretRef" }
+          }
+        },
+        "min_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "skip_catch_all": { "type": "boolean" },
+        "allow_generic_inbox": { "type": "boolean" },
+        "cache_days": { "$ref": "#/$defs/posInt" },
+        "respect_robots_txt": { "type": "boolean" }
+      }
+    },
+
+    "email": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dry_run", "providers", "daily_cap_per_user", "gap_minutes", "send_window_recipient_local",
+        "default_recipient_timezone", "approval_mode", "allow_auto_send", "auto_send_min_score",
+        "one_email_per_company_role", "contact_cooldown_days", "follow_up", "attachment_name", "opt_out_line"
+      ],
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "providers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["gmail", "outlook"] }
+        },
+        "daily_cap_per_user": { "$ref": "#/$defs/posInt" },
+        "gap_minutes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "$ref": "#/$defs/nonNegNumber" },
+            "max": { "$ref": "#/$defs/nonNegNumber" }
+          }
+        },
+        "send_window_recipient_local": {
+          "type": "string",
+          "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$"
+        },
+        "default_recipient_timezone": { "type": "string", "minLength": 1 },
+        "approval_mode": { "enum": ["review_each", "auto_above_score"] },
+        "allow_auto_send": { "type": "boolean" },
+        "auto_send_min_score": { "type": "number", "minimum": 0, "maximum": 100 },
+        "one_email_per_company_role": { "type": "boolean" },
+        "contact_cooldown_days": { "type": "integer", "minimum": 0 },
+        "follow_up": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "after_business_days", "max_count"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "after_business_days": { "$ref": "#/$defs/posInt" },
+            "max_count": { "type": "integer", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "attachment_name": { "type": "string", "pattern": "\\.pdf$" },
+        "opt_out_line": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "notifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ses_from", "daily_digest", "approval_reminders"],
+      "properties": {
+        "ses_from": { "type": "string", "pattern": "^[^@\\s]+@[^@\\s]+$" },
+        "daily_digest": { "type": "boolean" },
+        "approval_reminders": { "type": "boolean" }
+      }
+    },
+
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "log_level", "log_retention_days", "events_retention_days", "llm_payload_logging",
+        "llm_payload_retention_days", "trace_sample_rate", "metrics_namespace", "otlp_endpoint", "alerts"
+      ],
+      "properties": {
+        "log_level": { "enum": ["DEBUG", "INFO", "WARNING", "ERROR"] },
+        "log_retention_days": { "$ref": "#/$defs/posInt" },
+        "events_retention_days": { "$ref": "#/$defs/posInt" },
+        "llm_payload_logging": { "type": "boolean" },
+        "llm_payload_retention_days": { "$ref": "#/$defs/posInt" },
+        "trace_sample_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "metrics_namespace": { "type": "string", "minLength": 1 },
+        "otlp_endpoint": { "oneOf": [{ "$ref": "#/$defs/httpUrl" }, { "type": "null" }] },
+        "alerts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "emails", "dlq_messages_gt", "queue_oldest_age_minutes_gt", "stage_error_rate_pct_gt",
+            "llm_error_rate_pct_gt", "llm_p95_latency_seconds_gt", "daily_llm_cost_usd_gt",
+            "send_failure_rate_pct_gt", "reported_bounce_rate_pct_gt", "source_stale_hours_gt",
+            "api_5xx_rate_pct_gt"
+          ],
+          "properties": {
+            "emails": { "type": "array", "items": { "type": "string", "pattern": "^[^@\\s]+@[^@\\s]+$" } },
+            "slack_webhook": { "$ref": "#/$defs/secretRef" },
+            "dlq_messages_gt": { "type": "integer", "minimum": 0 },
+            "queue_oldest_age_minutes_gt": { "$ref": "#/$defs/nonNegNumber" },
+            "stage_error_rate_pct_gt": { "$ref": "#/$defs/pct" },
+            "llm_error_rate_pct_gt": { "$ref": "#/$defs/pct" },
+            "llm_p95_latency_seconds_gt": { "$ref": "#/$defs/nonNegNumber" },
+            "daily_llm_cost_usd_gt": { "$ref": "#/$defs/nonNegNumber" },
+            "send_failure_rate_pct_gt": { "$ref": "#/$defs/pct" },
+            "reported_bounce_rate_pct_gt": { "$ref": "#/$defs/pct" },
+            "source_stale_hours_gt": { "$ref": "#/$defs/nonNegNumber" },
+            "api_5xx_rate_pct_gt": { "$ref": "#/$defs/pct" }
+          }
+        }
+      }
+    },
+
+    "admin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "full_access_group", "read_only_group", "mask_pii_by_default", "require_reason_to_reveal_pii",
+        "allow_config_edit_in_ui", "config_deployment_strategy"
+      ],
+      "properties": {
+        "full_access_group": { "type": "string", "minLength": 1 },
+        "read_only_group": { "type": "string", "minLength": 1 },
+        "mask_pii_by_default": { "type": "boolean" },
+        "require_reason_to_reveal_pii": { "type": "boolean" },
+        "allow_config_edit_in_ui": { "type": "boolean" },
+        "config_deployment_strategy": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reply_tracking", "resume_tailoring"],
+      "properties": {
+        "reply_tracking": { "type": "boolean" },
+        "resume_tailoring": { "type": "boolean" }
+      }
+    }
+  }
+}

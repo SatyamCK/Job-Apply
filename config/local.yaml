@@ -1,0 +1,155 @@
+# Local development config. Hostnames are docker compose service names.
+# Secrets are `secret:<name>` and resolve from the env var <NAME> locally (see .env.example).
+environment: local
+version: 1
+
+runtime:
+  config_poll_seconds: 5                  # how often services check for a new config version
+
+database:
+  url: secret:database_url
+  pool_size: 5
+
+queues:
+  endpoint_url: http://elasticmq:9324     # null on AWS
+  region: us-west-2
+  max_receive_count: 5
+  dlq_suffix: -dlq
+  names:
+    fetch: jobapplier-local-fetch
+    normalize: jobapplier-local-normalize
+    match: jobapplier-local-match
+    contact: jobapplier-local-contact
+    draft: jobapplier-local-draft
+    send: jobapplier-local-send
+
+llm:
+  providers:
+    bedrock:
+      enabled: true
+      base_url: https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1   # a region where gpt-oss-20b is enabled
+      model: openai.gpt-oss-20b-1:0
+      auth: bedrock_short_term_key        # generated from the service's IAM role
+      timeout_seconds: 60
+      max_concurrency: 20
+    selfhosted:
+      enabled: false
+      base_url: http://llm.models.internal:8080/v1      # llama.cpp server on Graviton
+      model: gpt-oss-20b
+      auth: secret:selfhosted_llm_key
+      timeout_seconds: 180
+      max_concurrency: 4
+  default_provider: bedrock
+  fallback_provider: selfhosted           # used on errors or throttling, only if enabled
+  retries: { max_attempts: 3, base_delay_ms: 500 }
+  tasks:                                  # provider "default" = default_provider
+    parse_resume: { provider: default, reasoning_effort: low,    temperature: 0,   max_tokens: 1500, prompt: parse_resume/v1.md }
+    parse_job:    { provider: default, reasoning_effort: low,    temperature: 0,   max_tokens: 800,  prompt: parse_job/v1.md }
+    score_fit:    { provider: default, reasoning_effort: medium, temperature: 0,   max_tokens: 600,  prompt: score_fit/v1.md }
+    draft_email:  { provider: default, reasoning_effort: medium, temperature: 0.4, max_tokens: 900,  prompt: draft_email/v1.md }
+    check_claims: { provider: default, reasoning_effort: low,    temperature: 0,   max_tokens: 400,  prompt: check_claims/v1.md }
+
+pricing:                                  # USD per 1M tokens, for cost tracking. Verify current rates.
+  bedrock:    { input: 0.07, output: 0.30 }
+  selfhosted: { input: 0.0,  output: 0.0 }
+
+embeddings:
+  base_url: http://embedder:80/v1
+  model: BAAI/bge-m3
+  dimensions: 1024
+  batch_size: 32
+
+reranker:
+  base_url: http://reranker:80
+  model: BAAI/bge-reranker-v2-m3
+
+prompts:
+  bucket: s3://jobapplier-prompts-local
+
+matching:
+  vector_top_k: 100
+  rerank_top_k: 20
+  min_fit_score: 70
+  max_job_age_days: 14
+  llm_parse_only_shortlisted: true
+
+job_sources:
+  schedule: rate(3 hours)                 # EventBridge Scheduler expression
+  dedupe_on: [company, title, location]
+  registry_file: s3://jobapplier-config-local/company_registry.csv
+  sources:
+    greenhouse:     { enabled: true }
+    lever:          { enabled: true }
+    ashby:          { enabled: true }
+    arbeitnow:      { enabled: true }
+    hn_whos_hiring: { enabled: true }
+    adzuna:         { enabled: false, countries: [gb, us], app_id: secret:adzuna_app_id, app_key: secret:adzuna_app_key }
+    jooble:         { enabled: false, api_key: secret:jooble_api_key }
+    jsearch:        { enabled: false, api_key: secret:rapidapi_key }
+
+contact_finder:
+  order: [job_post, careers_page, hunter, apollo, name_pattern, generic_inbox]
+  providers:
+    hunter: { enabled: true,  api_key: secret:hunter_api_key, department: hr }
+    apollo: { enabled: false, api_key: secret:apollo_api_key, titles: [Recruiter, Talent Acquisition, HR Manager] }
+  verifier: { provider: zerobounce, api_key: secret:zerobounce_api_key }   # zerobounce | neverbounce | hunter
+  min_confidence: 0.7
+  skip_catch_all: true
+  allow_generic_inbox: false
+  cache_days: 30
+  respect_robots_txt: true
+
+email:
+  dry_run: true                           # true in dev/staging: record instead of sending
+  providers: [gmail, outlook]
+  daily_cap_per_user: 20
+  gap_minutes: { min: 3, max: 12 }
+  send_window_recipient_local: "09:30-17:30"
+  default_recipient_timezone: UTC
+  approval_mode: review_each              # review_each | auto_above_score
+  allow_auto_send: false                  # global switch for auto_above_score
+  auto_send_min_score: 85
+  one_email_per_company_role: true
+  contact_cooldown_days: 30
+  follow_up: { enabled: true, after_business_days: 5, max_count: 1 }
+  attachment_name: "{first}_{last}_Resume.pdf"
+  opt_out_line: "If you're not the right person, or would rather not hear from me, just let me know."
+
+notifications:                            # SES, our own users only
+  ses_from: notify@yourdomain.com
+  daily_digest: true
+  approval_reminders: true
+
+observability:
+  log_level: INFO
+  log_retention_days: 30
+  events_retention_days: 180
+  llm_payload_logging: true               # prompts and responses to encrypted S3, admin-only
+  llm_payload_retention_days: 14
+  trace_sample_rate: 1.0
+  metrics_namespace: JobApplier
+  otlp_endpoint: http://jaeger:4318       # OTLP/HTTP; the ADOT collector sidecar on AWS
+  alerts:
+    emails: [admin@yourdomain.com]
+    dlq_messages_gt: 0
+    queue_oldest_age_minutes_gt: 30
+    stage_error_rate_pct_gt: 5
+    llm_error_rate_pct_gt: 5
+    llm_p95_latency_seconds_gt: 60
+    daily_llm_cost_usd_gt: 20
+    send_failure_rate_pct_gt: 5
+    reported_bounce_rate_pct_gt: 3
+    source_stale_hours_gt: 12
+    api_5xx_rate_pct_gt: 2
+
+admin:
+  full_access_group: admin
+  read_only_group: support
+  mask_pii_by_default: true
+  require_reason_to_reveal_pii: true
+  allow_config_edit_in_ui: true
+  config_deployment_strategy: AppConfig.Linear50PercentEvery30Seconds
+
+features:
+  reply_tracking: false                   # needs read scopes (restricted for Gmail)
+  resume_tailoring: false
